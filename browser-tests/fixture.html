@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>:root{--overlay-color:rgba(255,255,255,.05);--primary-foreground-color:#fff;--primary-accent-color:#7b5bf5;--border-radius:2rem}</style>
+</head><body>
+<div id="app">
+  <div class="streams-list-container-xYMJo">
+    <div class="select-choices-wrapper-xGzfs"><div class="episode-title-x">S1E1 Pilot</div></div>
+    <div class="streams-container-bbSc4" id="sc"></div>
+  </div>
+</div>
+<pre id="out"></pre>
+<script>
+const rows = [
+  ["Torrentio\n4K HDR", "[Grp] Show S01E01 2160p WEB-DL HDR10 x265\n\ud83d\udc64 10 \ud83d\udcbe 4 GB"],
+  ["Torrentio\n1080p", "[Grp] Show S01E01 1080p BluRay x264 \ud83c\uddec\ud83c\udde7 Dual Audio"],
+  ["Torrentio\n1080p", "[Grp] Show S01E01 1080p English Dubbed x265"],
+  ["Torrentio\n1080p", "[Grp] Show S01E01 1080p Multi Subs"],
+  ["Torrentio\n480p", "Show S01E01 DVDRip x264"],
+  ["Torrentio\n480p", "Show S01E01 CAM x264"],
+];
+const sc = document.getElementById("sc");
+rows.forEach(([name, desc]) => {
+  const wrap = document.createElement("div");           // Popup wrapper (React)
+  wrap.innerHTML = `<a class="button-container-a stream-container-JPdah" title="Torrentio"><div class="info-container-TihQo"><div class="addon-name-container-x"><div class="addon-name-tC8PX"></div></div></div><div class="description-container-vW_De"></div></a>`;
+  wrap.querySelector(".addon-name-tC8PX").textContent = name;
+  wrap.querySelector(".description-container-vW_De").textContent = desc;
+  sc.append(wrap);
+});
+const inst = document.createElement("a");
+inst.className = "install-button-container-zz"; inst.textContent = "Install addons";
+sc.append(inst);
+location.hash = "#/metadetails/series/tt1/tt1%3A1%3A1";
+</script>
+<script src="../stream-filter.plugin.js"></script>
+<script src="dom-test.js"></script>
+</body></html>

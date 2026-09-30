@@ -2,7 +2,7 @@
  * @name StreamFilter
  * @description Adds a filter bar with quick-toggle chips to the streams list on movie and episode pages.
  * @updateUrl https://raw.githubusercontent.com/SilentKnightOwl/stremio-filter-plugin/main/stream-filter.plugin.js
- * @version 0.1.0
+ * @version 0.2.0
  * @author SilentKnightOwl
  */
 
@@ -54,7 +54,44 @@
         return true;
     }
 
-    const Core = { CHIPS, parseQuery, matches };
+    // ---- Routing: which show is the user looking at? ----
+    // Live routes: #/metadetails/:type/:id/:videoId?  (#/detail/... is a legacy alias)
+    //              #/player/:stream/:streamTransportUrl/:metaTransportUrl/:type/:id/:videoId?
+    // The key is "type/id" (no videoId) so all episodes of a show share it.
+
+    const decode = (s) => {
+        try {
+            return decodeURIComponent(s);
+        } catch (_) {
+            return s;
+        }
+    };
+
+    const hashSegments = (hash) =>
+        String(hash == null ? "" : hash)
+            .replace(/^#\/?/, "")
+            .split("?")[0]
+            .split("/")
+            .filter(Boolean);
+
+    function showKeyFromHash(hash) {
+        const seg = hashSegments(hash);
+        let type;
+        let id;
+        if (seg[0] === "metadetails" || seg[0] === "detail") {
+            [, type, id] = seg;
+        } else if (seg[0] === "player") {
+            [, , , , type, id] = seg;
+        }
+        return type && id ? decode(type) + "/" + decode(id) : null;
+    }
+
+    function isDetailHash(hash) {
+        const first = hashSegments(hash)[0];
+        return first === "metadetails" || first === "detail";
+    }
+
+    const Core = { CHIPS, parseQuery, matches, showKeyFromHash, isDetailHash };
 
     // Under Node (tests) export the pure logic and stop; no DOM there.
     if (typeof module !== "undefined" && module.exports) {
@@ -62,13 +99,211 @@
         return;
     }
 
-    const log = (msg) => {
+    // ---- DOM layer (runs inside Stremio's web page) ----
+
+    // Stremio's CSS class names are hashed (e.g. "stream-container-JPdah"), so match on the
+    // stable prefix. If Stremio renames these, update here; the plugin will log a warning.
+    const SEL = {
+        list: '[class*="streams-list-container-"]',
+        header: '[class*="select-choices-wrapper-"]',
+        rows: '[class*="streams-container-"]',
+        row: '[class*="stream-container-"]',
+    };
+
+    const CSS = `
+#sf-bar{display:flex;flex-direction:column;gap:.6rem;flex:none;margin:.5rem 0 1rem}
+#sf-bar .sf-row{display:flex;align-items:center;gap:1rem}
+#sf-bar .sf-input{flex:1;min-width:0;height:2.6rem;padding:0 1.2rem;border:thin solid transparent;border-radius:var(--border-radius,2rem);background:var(--overlay-color);color:var(--primary-foreground-color);font-size:1rem;outline:none}
+#sf-bar .sf-input:focus{border-color:var(--primary-foreground-color)}
+#sf-bar .sf-input::placeholder{color:var(--primary-foreground-color);opacity:.4}
+#sf-bar .sf-count{color:var(--primary-foreground-color);opacity:.6;font-size:.9rem;white-space:nowrap}
+#sf-bar .sf-chips{display:flex;flex-wrap:wrap;gap:.5rem}
+#sf-bar .sf-chip{padding:.3rem 1rem;border:thin solid var(--overlay-color);border-radius:2rem;background:var(--overlay-color);color:var(--primary-foreground-color);font-size:.95rem;cursor:pointer}
+#sf-bar .sf-chip:hover{border-color:var(--primary-foreground-color)}
+#sf-bar .sf-chip[aria-pressed="true"]{background:var(--primary-accent-color);border-color:var(--primary-accent-color)}
+#sf-bar .sf-empty{color:var(--primary-foreground-color);opacity:.6;padding:.5rem 0}
+#sf-bar[hidden],#sf-bar [hidden]{display:none!important}
+[data-sf-hidden]{display:none!important}
+`;
+
+    const log = (level, msg) => {
         try {
-            StremioEnhancedAPI.logger.info("[StreamFilter] " + msg);
+            StremioEnhancedAPI.logger[level]("[StreamFilter] " + msg);
         } catch (_) {
-            console.log("[StreamFilter] " + msg);
+            console[level === "info" ? "log" : level]("[StreamFilter] " + msg);
         }
     };
 
-    log("loaded");
+    // Filter state for the show currently being viewed. In memory only; reset when the
+    // user moves to another title or leaves the detail/player pages.
+    const state = { showKey: null, query: "", chips: new Set() };
+
+    let bar = null;
+    let input = null;
+    let countEl = null;
+    let emptyEl = null;
+    let chipEls = new Map();
+    let debounceTimer = null;
+    let warnedMissingHeader = false;
+
+    function syncRoute() {
+        const key = showKeyFromHash(location.hash);
+        if (key === state.showKey) return;
+        state.showKey = key;
+        state.query = "";
+        state.chips.clear();
+        if (input) input.value = "";
+        for (const el of chipEls.values()) el.setAttribute("aria-pressed", "false");
+    }
+
+    function buildBar() {
+        bar = document.createElement("div");
+        bar.id = "sf-bar";
+
+        const row = document.createElement("div");
+        row.className = "sf-row";
+        input = document.createElement("input");
+        input.className = "sf-input";
+        input.type = "text";
+        input.placeholder = "Filter streams\u2026  e.g. 1080p -cam";
+        input.spellcheck = false;
+        input.autocomplete = "off";
+        input.value = state.query;
+        countEl = document.createElement("span");
+        countEl.className = "sf-count";
+        row.append(input, countEl);
+
+        const chips = document.createElement("div");
+        chips.className = "sf-chips";
+        chipEls = new Map();
+        for (const chip of CHIPS) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "sf-chip";
+            b.textContent = chip.label;
+            b.setAttribute("aria-pressed", String(state.chips.has(chip.id)));
+            b.addEventListener("click", () => {
+                if (state.chips.has(chip.id)) state.chips.delete(chip.id);
+                else state.chips.add(chip.id);
+                b.setAttribute("aria-pressed", String(state.chips.has(chip.id)));
+                applyFilter();
+            });
+            chipEls.set(chip.id, b);
+            chips.append(b);
+        }
+
+        emptyEl = document.createElement("div");
+        emptyEl.className = "sf-empty";
+        emptyEl.textContent = "No streams match your filter.";
+        emptyEl.hidden = true;
+
+        bar.append(row, chips, emptyEl);
+
+        // Keep typing away from Stremio's global keyboard shortcuts (space, f, m, ...).
+        for (const type of ["keydown", "keyup", "keypress"]) {
+            input.addEventListener(type, (e) => e.stopPropagation());
+        }
+        input.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                input.value = "";
+                state.query = "";
+                applyFilter();
+            }
+        });
+        input.addEventListener("input", () => {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                state.query = input.value;
+                applyFilter();
+            }, 100);
+        });
+    }
+
+    function mountBar(list) {
+        if (bar && list.contains(bar)) return true;
+        if (bar) bar.remove();
+        buildBar();
+        const header = list.querySelector(SEL.header);
+        if (header) {
+            header.insertAdjacentElement("afterend", bar);
+        } else {
+            if (!warnedMissingHeader) {
+                warnedMissingHeader = true;
+                log("warn", "streams header not found (Stremio markup changed?); placing bar at top of list");
+            }
+            list.insertBefore(bar, list.firstChild);
+        }
+        return true;
+    }
+
+    // The direct child of the streams container that holds this stream button.
+    function rowWrapper(btn, container) {
+        let el = btn;
+        while (el.parentElement && el.parentElement !== container) el = el.parentElement;
+        return el.parentElement === container ? el : btn;
+    }
+
+    function applyFilter() {
+        try {
+            syncRoute();
+            if (!isDetailHash(location.hash)) return;
+            const list = document.querySelector(SEL.list);
+            if (!list) return;
+            mountBar(list);
+
+            const container = list.querySelector(SEL.rows);
+            bar.hidden = !container;
+            if (!container) return;
+
+            const active = [...state.chips];
+            let total = 0;
+            let shown = 0;
+            for (const btn of container.querySelectorAll(SEL.row)) {
+                total++;
+                // React reuses row elements for different streams, so re-evaluate every time.
+                const text = (btn.textContent || "") + "\n" + (btn.getAttribute("title") || "");
+                const ok = matches(text, state.query, active);
+                rowWrapper(btn, container).toggleAttribute("data-sf-hidden", !ok);
+                if (ok) shown++;
+            }
+
+            const filtering = active.length > 0 || parseQuery(state.query).include.length + parseQuery(state.query).exclude.length > 0;
+            const label = !total ? "" : filtering ? `showing ${shown} of ${total}` : `${total} streams`;
+            if (countEl.textContent !== label) countEl.textContent = label;
+            emptyEl.hidden = !(total > 0 && shown === 0);
+        } catch (err) {
+            log("error", "filter failed: " + (err && err.message));
+        }
+    }
+
+    function start() {
+        // Clean up a previous copy (plugin reload without a page reload).
+        if (window.__streamFilterObserver) window.__streamFilterObserver.disconnect();
+        document.getElementById("sf-style")?.remove();
+        document.getElementById("sf-bar")?.remove();
+
+        const style = document.createElement("style");
+        style.id = "sf-style";
+        style.textContent = CSS;
+        document.head.append(style);
+
+        // Observer callbacks run as microtasks, before paint, so rows never flash unfiltered.
+        // applyFilter only changes attributes (not observed) and text inside the bar
+        // (ignored below), so it cannot retrigger itself indefinitely.
+        const observer = new MutationObserver((mutations) => {
+            if (!isDetailHash(location.hash)) return;
+            if (bar && mutations.every((m) => bar.contains(m.target))) return;
+            applyFilter();
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+        window.__streamFilterObserver = observer;
+
+        window.addEventListener("hashchange", applyFilter);
+
+        applyFilter();
+        log("info", "loaded");
+    }
+
+    if (document.body) start();
+    else document.addEventListener("DOMContentLoaded", start, { once: true });
 })();

@@ -5,6 +5,7 @@
   "private": true,
   "license": "MIT",
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test test/",
+    "test:browser": "browser-tests/run.sh"
   }
 }
