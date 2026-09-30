@@ -2,7 +2,7 @@
  * @name StreamFilter
  * @description Adds a filter bar with quick-toggle chips to the streams list on movie and episode pages.
  * @updateUrl https://raw.githubusercontent.com/SilentKnightOwl/stremio-filter-plugin/main/stream-filter.plugin.js
- * @version 0.2.0
+ * @version 0.3.0
  * @author SilentKnightOwl
  */
 
@@ -14,14 +14,89 @@
     // A term is a plain substring, or a RegExp for whole-word matching.
     const wholeWord = (w) => new RegExp("(^|[^a-z0-9])" + w + "($|[^a-z0-9])");
 
+    // Escape regex metacharacters so user-typed whole-word terms can't throw or act as a pattern.
+    const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    // Chip definitions, data-driven. `terms` is a comma-separated string; a term prefixed
+    // with `~` is matched as a whole word, everything else is a plain substring.
     // Chips in the same `group` are OR'd; different groups are AND'd.
-    const CHIPS = [
-        { id: "4k", label: "4K", group: "res", terms: ["2160p", "4k", "uhd"] },
-        { id: "1080p", label: "1080p", group: "res", terms: ["1080p"] },
-        { id: "hdr", label: "HDR", group: "hdr", terms: ["hdr", "dolby vision", wholeWord("dv")] },
-        { id: "dub", label: "Dub", group: "dub", terms: ["dub", "dual audio"] },
-        { id: "gb", label: "\u{1F1EC}\u{1F1E7}", group: "gb", terms: ["\u{1F1EC}\u{1F1E7}"] },
+    const DEFAULT_CHIPS = [
+        { id: "4k",    label: "4K",    group: "res", terms: "2160p,4k,uhd" },
+        { id: "1080p", label: "1080p", group: "res", terms: "1080p" },
+        { id: "720p",  label: "720p",  group: "res", terms: "720p" },
+        { id: "hdr",   label: "HDR",   group: "hdr", terms: "hdr,dolby vision,~dv" },
+        { id: "dub",   label: "Dub",   group: "dub", terms: "dub,dual audio" },
+        { id: "gb",    label: "\u{1F1EC}\u{1F1E7}", group: "gb", terms: "\u{1F1EC}\u{1F1E7}" },
     ];
+
+    // One raw term -> a plain lowercased string, a whole-word RegExp, or null when empty.
+    function compileTerm(raw) {
+        const s = String(raw == null ? "" : raw).trim().toLowerCase();
+        if (!s) return null;
+        if (s.startsWith("~")) {
+            const rest = s.slice(1).trim();
+            if (!rest) return null;
+            return wholeWord(escapeRegExp(rest));
+        }
+        return s;
+    }
+
+    // A comma-separated terms string -> a deduped array of compiled matchers.
+    function compileTerms(str) {
+        const out = [];
+        const seen = new Set();
+        for (const part of String(str == null ? "" : str).split(",")) {
+            const term = compileTerm(part);
+            if (term == null) continue;
+            const sig = term instanceof RegExp ? "re:" + term.source : "s:" + term;
+            if (seen.has(sig)) continue;
+            seen.add(sig);
+            out.push(term);
+        }
+        return out;
+    }
+
+    // Merge user settings over the defaults, returning the enabled chips in display order.
+    function resolveChips(settings) {
+        const s = settings && typeof settings === "object" ? settings : {};
+        const result = [];
+        for (const def of DEFAULT_CHIPS) {
+            const enabledRaw = s["chip." + def.id + ".enabled"];
+            const enabled = !(enabledRaw === false || enabledRaw === "false");
+            if (!enabled) continue;
+
+            const termsRaw = s["chip." + def.id + ".terms"];
+            const chosen = typeof termsRaw === "string" && termsRaw.trim() ? termsRaw : def.terms;
+            let terms = compileTerms(chosen);
+            if (terms.length === 0) terms = compileTerms(def.terms);
+
+            result.push({ id: def.id, label: def.label, group: def.group, terms });
+        }
+        return result;
+    }
+
+    // Settings schema: one toggle then one input per chip.
+    function buildSchema() {
+        const schema = [];
+        for (const def of DEFAULT_CHIPS) {
+            schema.push({
+                key: "chip." + def.id + ".enabled",
+                label: "Show " + def.label + " chip",
+                type: "toggle",
+                defaultValue: true,
+            });
+            schema.push({
+                key: "chip." + def.id + ".terms",
+                label: def.label + " terms",
+                type: "input",
+                defaultValue: def.terms,
+                description: "Comma-separated. Prefix a term with ~ to match it as a whole word.",
+            });
+        }
+        return schema;
+    }
+
+    const CHIPS = resolveChips(null);
 
     function parseQuery(query) {
         const include = [];
@@ -36,20 +111,20 @@
 
     const hasTerm = (text, term) => (term instanceof RegExp ? term.test(text) : text.includes(term));
 
-    function matches(text, query, activeChipIds) {
+    function matches(text, query, activeChipIds, chips = CHIPS) {
         const haystack = String(text == null ? "" : text).toLowerCase();
         const { include, exclude } = parseQuery(query);
         if (!include.every((w) => haystack.includes(w))) return false;
         if (exclude.some((w) => haystack.includes(w))) return false;
 
         const groups = new Map();
-        for (const chip of CHIPS) {
+        for (const chip of chips) {
             if (!(activeChipIds || []).includes(chip.id)) continue;
             if (!groups.has(chip.group)) groups.set(chip.group, []);
             groups.get(chip.group).push(chip);
         }
-        for (const chips of groups.values()) {
-            if (!chips.some((c) => c.terms.some((t) => hasTerm(haystack, t)))) return false;
+        for (const group of groups.values()) {
+            if (!group.some((c) => c.terms.some((t) => hasTerm(haystack, t)))) return false;
         }
         return true;
     }
@@ -91,7 +166,18 @@
         return first === "metadetails" || first === "detail";
     }
 
-    const Core = { CHIPS, parseQuery, matches, showKeyFromHash, isDetailHash };
+    const Core = {
+        CHIPS,
+        DEFAULT_CHIPS,
+        resolveChips,
+        buildSchema,
+        compileTerm,
+        compileTerms,
+        parseQuery,
+        matches,
+        showKeyFromHash,
+        isDetailHash,
+    };
 
     // Under Node (tests) export the pure logic and stop; no DOM there.
     if (typeof module !== "undefined" && module.exports) {
@@ -111,7 +197,7 @@
     };
 
     const CSS = `
-#sf-bar{display:flex;flex-direction:column;gap:.6rem;flex:none;margin:.5rem 0 1rem}
+#sf-bar{display:flex;flex-direction:column;gap:.6rem;flex:none;margin:.5rem 1rem 1rem}
 #sf-bar .sf-row{display:flex;align-items:center;gap:1rem}
 #sf-bar .sf-input{flex:1;min-width:0;height:2.6rem;padding:0 1.2rem;border:thin solid transparent;border-radius:var(--border-radius,2rem);background:var(--overlay-color);color:var(--primary-foreground-color);font-size:1rem;outline:none}
 #sf-bar .sf-input:focus{border-color:var(--primary-foreground-color)}
@@ -137,12 +223,14 @@
     // Filter state for the show currently being viewed. In memory only; reset when the
     // user moves to another title or leaves the detail/player pages.
     const state = { showKey: null, query: "", chips: new Set() };
+    let chips = CHIPS;
 
     let bar = null;
     let input = null;
     let countEl = null;
     let emptyEl = null;
     let chipEls = new Map();
+    let chipsEl = null;
     let debounceTimer = null;
     let warnedMissingHeader = false;
 
@@ -154,6 +242,28 @@
         state.chips.clear();
         if (input) input.value = "";
         for (const el of chipEls.values()) el.setAttribute("aria-pressed", "false");
+    }
+
+    function renderChips() {
+        if (!chipsEl) return;
+        chipsEl.textContent = "";
+        chipEls = new Map();
+        for (const chip of chips) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "sf-chip";
+            b.textContent = chip.label;
+            b.setAttribute("aria-pressed", String(state.chips.has(chip.id)));
+            b.addEventListener("click", () => {
+                if (state.chips.has(chip.id)) state.chips.delete(chip.id);
+                else state.chips.add(chip.id);
+                b.setAttribute("aria-pressed", String(state.chips.has(chip.id)));
+                applyFilter();
+            });
+            chipEls.set(chip.id, b);
+            chipsEl.append(b);
+        }
+        chipsEl.hidden = chips.length === 0;
     }
 
     function buildBar() {
@@ -173,31 +283,16 @@
         countEl.className = "sf-count";
         row.append(input, countEl);
 
-        const chips = document.createElement("div");
-        chips.className = "sf-chips";
-        chipEls = new Map();
-        for (const chip of CHIPS) {
-            const b = document.createElement("button");
-            b.type = "button";
-            b.className = "sf-chip";
-            b.textContent = chip.label;
-            b.setAttribute("aria-pressed", String(state.chips.has(chip.id)));
-            b.addEventListener("click", () => {
-                if (state.chips.has(chip.id)) state.chips.delete(chip.id);
-                else state.chips.add(chip.id);
-                b.setAttribute("aria-pressed", String(state.chips.has(chip.id)));
-                applyFilter();
-            });
-            chipEls.set(chip.id, b);
-            chips.append(b);
-        }
+        chipsEl = document.createElement("div");
+        chipsEl.className = "sf-chips";
+        renderChips();
 
         emptyEl = document.createElement("div");
         emptyEl.className = "sf-empty";
         emptyEl.textContent = "No streams match your filter.";
         emptyEl.hidden = true;
 
-        bar.append(row, chips, emptyEl);
+        bar.append(row, chipsEl, emptyEl);
 
         // Keep typing away from Stremio's global keyboard shortcuts (space, f, m, ...).
         for (const type of ["keydown", "keyup", "keypress"]) {
@@ -262,7 +357,7 @@
                 total++;
                 // React reuses row elements for different streams, so re-evaluate every time.
                 const text = (btn.textContent || "") + "\n" + (btn.getAttribute("title") || "");
-                const ok = matches(text, state.query, active);
+                const ok = matches(text, state.query, active, chips);
                 rowWrapper(btn, container).toggleAttribute("data-sf-hidden", !ok);
                 if (ok) shown++;
             }
@@ -274,6 +369,63 @@
         } catch (err) {
             log("error", "filter failed: " + (err && err.message));
         }
+    }
+
+    function applyResolved(settings) {
+        chips = resolveChips(settings);
+        const ids = new Set(chips.map((c) => c.id));
+        for (const id of [...state.chips]) if (!ids.has(id)) state.chips.delete(id);
+        renderChips();
+        applyFilter();
+    }
+
+    async function readSettings() {
+        const schema = buildSchema();
+        const values = await Promise.all(
+            schema.map((item) => StremioEnhancedAPI.getSetting(item.key).catch(() => null))
+        );
+        const settings = {};
+        schema.forEach((item, i) => {
+            settings[item.key] = values[i];
+        });
+        return settings;
+    }
+
+    function sanitizeSaved(settings) {
+        const s = settings && typeof settings === "object" ? settings : {};
+        for (const item of buildSchema()) {
+            if (item.type !== "input") continue;
+            const value = s[item.key];
+            if (typeof value === "string" && /["<>]/.test(value)) {
+                StremioEnhancedAPI.saveSetting(item.key, value.replace(/["<>]/g, "")).catch(() => {});
+            }
+        }
+    }
+
+    async function bootstrap() {
+        if (typeof StremioEnhancedAPI === "undefined") {
+            start();
+            return;
+        }
+        try {
+            try {
+                await StremioEnhancedAPI.registerSettings(buildSchema());
+            } catch (err) {
+                log("info", "settings schema already registered: " + (err && err.message));
+            }
+            chips = resolveChips(await readSettings());
+            try {
+                StremioEnhancedAPI.onSettingsSaved((settings) => {
+                    applyResolved(settings);
+                    sanitizeSaved(settings);
+                });
+            } catch (err) {
+                log("error", "failed to subscribe to settings: " + (err && err.message));
+            }
+        } catch (err) {
+            log("error", "settings bootstrap failed: " + (err && err.message));
+        }
+        start();
     }
 
     function start() {
@@ -304,6 +456,6 @@
         log("info", "loaded");
     }
 
-    if (document.body) start();
-    else document.addEventListener("DOMContentLoaded", start, { once: true });
+    if (document.body) bootstrap();
+    else document.addEventListener("DOMContentLoaded", bootstrap, { once: true });
 })();

@@ -15,6 +15,7 @@ const rows = [
   ["Torrentio\n1080p", "[Grp] Show S01E01 1080p BluRay x264 \ud83c\uddec\ud83c\udde7 Dual Audio"],
   ["Torrentio\n1080p", "[Grp] Show S01E01 1080p English Dubbed x265"],
   ["Torrentio\n1080p", "[Grp] Show S01E01 1080p Multi Subs"],
+  ["Torrentio\n720p", "[Grp] Show S01E01 720p WEB-DL"],
   ["Torrentio\n480p", "Show S01E01 DVDRip x264"],
   ["Torrentio\n480p", "Show S01E01 CAM x264"],
 ];
@@ -30,6 +31,20 @@ const inst = document.createElement("a");
 inst.className = "install-button-container-zz"; inst.textContent = "Install addons";
 sc.append(inst);
 location.hash = "#/metadetails/series/tt1/tt1%3A1%3A1";
+</script>
+<script>
+  if (!new URLSearchParams(location.search).has("nostub")) {
+    window.__sfSettings = {};
+    window.__sfSchema = null;
+    window.__sfSavedCb = null;
+    window.StremioEnhancedAPI = {
+      logger: { info(){}, warn(){}, error(){} },
+      getSetting: (k) => Promise.resolve(Object.prototype.hasOwnProperty.call(window.__sfSettings, k) ? window.__sfSettings[k] : null),
+      saveSetting: (k, v) => { window.__sfSettings[k] = v; if (window.__sfSavedCb) window.__sfSavedCb(Object.assign({}, window.__sfSettings)); return Promise.resolve(true); },
+      registerSettings: (schema) => { window.__sfSchema = schema; return Promise.resolve(true); },
+      onSettingsSaved: (cb) => { window.__sfSavedCb = cb; },
+    };
+  }
 </script>
 <script src="../stream-filter.plugin.js"></script>
 <script src="dom-test.js"></script>

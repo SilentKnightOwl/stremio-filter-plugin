@@ -3,7 +3,7 @@
 A [Stremio Enhanced](https://github.com/REVENGE977/stremio-enhanced) plugin that adds a filter bar to the streams list. It shows up when you open a movie or episode, and it works on the streams from every addon, not just Torrentio.
 
 - A text box above the list, with a "showing X of Y" count.
-- Quick-toggle chips: **4K**, **1080p**, **HDR**, **Dub**, **🇬🇧**.
+- Quick-toggle chips: **4K**, **1080p**, **720p**, **HDR**, **Dub**, **🇬🇧**.
 - Your filter is kept while you move between episodes of the same show (or into the player and back). It is cleared when you open a different title or leave the show.
 
 ## Install
@@ -41,15 +41,26 @@ Type words into the box. Matching ignores case and looks anywhere in the stream'
 |---|---|
 | 4K | `2160p`, `4k`, `uhd` |
 | 1080p | `1080p` |
+| 720p | `720p` |
 | HDR | `hdr` (so `hdr10` too), `dolby vision`, `dv` as a whole word (so `DVDRip` does not match) |
 | Dub | `dub` (so `dubbed` too), `dual audio` |
 | 🇬🇧 | the literal 🇬🇧 flag |
 
-4K and 1080p are combined with OR, so turning on both shows either. Every other chip, and the text box, must also match (AND). For example 1080p + Dub + `-x264` means a 1080p dub without x264.
+4K, 1080p and 720p are combined with OR, so turning on any of them shows streams matching any of the three. Every other chip, and the text box, must also match (AND). For example 1080p + Dub + `-x264` means a 1080p dub without x264.
 
 `multi` is deliberately not part of Dub, because it also appears in "multi subs".
 
-The chip terms are hardcoded in `CHIPS` at the top of `stream-filter.plugin.js`.
+These are only the defaults. See Settings below to change them.
+
+## Settings
+
+Chips are configurable. Open Stremio Enhanced settings, go to the Enhanced section, then Plugins, turn **StreamFilter** on, and click the plugin's options button. Each chip has a show/hide toggle and a single-line field of comma-separated match terms. A term prefixed with `~` matches as a whole word, so `~dv` catches DV but not DVDRip. Plain terms match as substrings. Leave a terms field empty and the built-in default is used; the Chips table above lists those.
+
+Changes show up on the open streams list immediately, with no reload.
+
+Settings are saved to `stream-filter.plugin.json` in the plugins folder. The app's settings UI does not escape them, so the plugin strips `"`, `<` and `>` from term fields when saving.
+
+If the plugin's set of setting fields changes, say after an update, restart Stremio Enhanced fully. `Ctrl+R` keeps the old fields registered in memory, so the new ones will not show up.
 
 ## If Stremio changes its layout
 
